@@ -58,12 +58,12 @@ st.title("💰 Družinski Proračun")
 with st.expander("➕ Dodaj nov vnos", expanded=False):
     col1, col2 = st.columns(2)
     with col1:
-        clan = st.selectbox("Družinski član", ["Oče", "Mama", "Otrok 1", "Otrok 2"])
+        clan = st.selectbox("Družinski član", ["Miha", "Lana", "Rea", "Oli"])
         tip = st.radio("Vrsta", ["odhodek", "prihodek"], horizontal=True)
         znesek = st.number_input("Znesek (€)", min_value=0.01, step=1.0)
     with col2:
         izbran_datum = st.date_input("Datum transakcije", value=date.today())
-        kategorije = ["Hrana", "Položnice", "Bencin", "Zabava", "Plača", "Drugo"]
+        kategorije = ["Hrana", "Položnice", "Bencin", "Zabava", "Plača", "Drugo", "Kredit"]
         kategorija = st.selectbox("Kategorija", kategorije)
         opis = st.text_input("Opis (neobvezno)")
 
