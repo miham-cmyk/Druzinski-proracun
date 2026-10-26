@@ -31,7 +31,7 @@ with st.expander("➕ Dodaj nov vnos", expanded=True):
         tip = st.radio("Vrsta", ["odhodek", "prihodek"], horizontal=True)
         znesek = st.number_input("Znesek (€)", min_value=0.01, step=1.0)
     with col2:
-        kategorije = ["Hrana", "Položnice", "Bencin", "Zabava", "Plača", "Drugo"]
+        kategorije = ["Hrana", "Položnice", "Bencin", "Zabava", "Plača", "Drugo", "Kredit"]
         kategorija = st.selectbox("Kategorija", kategorije)
         opis = st.text_input("Opis (neobvezno)")
 
