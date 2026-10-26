@@ -93,16 +93,16 @@ with zavihek_vnos:
             st.toast("Zabeleženo: Kava 2 €")
             varno_osvezi()
     with qcol2:
-        if st.button("🥪 Malica (8.50 €)"):
+        if st.button("🥪 Malica (10 €)"):
             cursor.execute("INSERT INTO transakcije (datum, clan, tip, kategorija, znesek, opis) VALUES (?, ?, ?, ?, ?, ?)",
-                           (date.today().isoformat(), "Miha", "odhodek", "Hrana", 8.50, "Malica"))
+                           (date.today().isoformat(), "Miha", "odhodek", "Hrana", 10, "Malica"))
             conn.commit()
-            st.toast("Zabeleženo: Malica 8.50 €")
+            st.toast("Zabeleženo: Malica 10 €")
             varno_osvezi()
     with qcol3:
-        if st.button("🛒 Mercator / Trgovina (30.00 €)"):
+        if st.button("🛒 Trgovina (30.00 €)"):
             cursor.execute("INSERT INTO transakcije (datum, clan, tip, kategorija, znesek, opis) VALUES (?, ?, ?, ?, ?, ?)",
-                           (date.today().isoformat(), "Lana", "odhodek", "Hrana", 30.00, "Mercator"))
+                           (date.today().isoformat(), "Lana", "odhodek", "Hrana", 30.00, "Trgovina"))
             conn.commit()
             st.toast("Zabeleženo: Trgovina 30 €")
             varno_osvezi()
