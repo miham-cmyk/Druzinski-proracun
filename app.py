@@ -159,13 +159,19 @@ def nalozi_podatke(tabela: str, order_col: str = "id", asc: bool = False) -> pd.
 df_clani_db = nalozi_podatke("clani_seznam", "ime", asc=True)
 if df_clani_db.empty:
     for c in ["Miha", "Lana", "Rea", "Oli"]:
-        supabase.table("clani_seznam").insert({"ime": c}).execute()
+        try:
+            supabase.table("clani_seznam").insert({"ime": c}).execute()
+        except Exception:
+            pass
     df_clani_db = nalozi_podatke("clani_seznam", "ime", asc=True)
 
 df_kat_db = nalozi_podatke("kategorije_seznam", "ime", asc=True)
 if df_kat_db.empty:
     for k in ["Hrana", "Položnice", "Bencin", "Zabava", "Plača", "Drugo", "Kredit", "Elektrika Avto"]:
-        supabase.table("kategorije_seznam").insert({"ime": k}).execute()
+        try:
+            supabase.table("kategorije_seznam").insert({"ime": k}).execute()
+        except Exception:
+            pass
     df_kat_db = nalozi_podatke("kategorije_seznam", "ime", asc=True)
 
 CLANI = df_clani_db["ime"].tolist() if not df_clani_db.empty else ["Miha", "Lana", "Rea", "Oli"]
@@ -213,6 +219,7 @@ st_fiksnih = len(df_vsi_fiksni)
 st_vnesenih_fiksnih = 0
 
 if not df_vse_tr.empty:
+    df_vse_tr["znesek"] = pd.to_numeric(df_vse_tr["znesek"], errors="coerce").fillna(0.0)
     df_vse_tr["datum_dt"] = pd.to_datetime(df_vse_tr["datum"])
     df_vse_tr["leto_mesec"] = df_vse_tr["datum_dt"].dt.strftime("%Y-%m")
     tr_ta_mesec = df_vse_tr[df_vse_tr["leto_mesec"] == mesec_danes]
@@ -255,22 +262,49 @@ z_vnos, z_pregled, z_letno, z_varcevanje, z_fiksni, z_limiti, z_uredi, z_nastavi
 ])
 
 # ==========================================
-# 1. ZAVIHEK: VNOS TRANSAKCIJE
+# 1. ZAVIHEK: VNOS TRANSAKCIJE S SPLETNIM PREVERJANJEM LIMITA
 # ==========================================
 with z_vnos:
     st.subheader("📝 Vnos nove transakcije")
-    with st.form("obrazec_vnos", clear_on_submit=True):
-        col1, col2 = st.columns(2)
-        with col1:
-            clan = st.selectbox("Družinski član", CLANI)
-            tip = st.radio("Vrsta", ["odhodek", "prihodek"], horizontal=True)
-            znesek = st.number_input("Znesek (€)", min_value=0.01, step=1.0)
-        with col2:
-            izbran_datum = st.date_input("Datum transakcije", value=date.today())
-            kategorija = st.selectbox("Kategorija", KATEGORIJE)
-            opis = st.text_input("Opis transakcije")
+    col1, col2 = st.columns(2)
+    with col1:
+        clan = st.selectbox("Družinski član", CLANI)
+        tip = st.radio("Vrsta", ["odhodek", "prihodek"], horizontal=True)
+        znesek = st.number_input("Znesek (€)", min_value=0.0, step=1.0, format="%.2f")
+    with col2:
+        izbran_datum = st.date_input("Datum transakcije", value=date.today())
+        kategorija = st.selectbox("Kategorija", KATEGORIJE)
+        opis = st.text_input("Opis transakcije")
 
-        if st.form_submit_button("Shrani transakcijo", type="primary", width="stretch"):
+    # Takojšnje preverjanje stanja limita ob tipkanju
+    if tip == "odhodek" and not df_lim_check.empty and znesek > 0:
+        lim_vrstica = df_lim_check[df_lim_check["kategorija"] == kategorija]
+        if not lim_vrstica.empty:
+            lim_val = float(lim_vrstica.iloc[0]["limit_znesek"])
+            mesec_vnosa = izbran_datum.strftime("%Y-%m")
+            if not df_vse_tr.empty:
+                porabljeno_do_sedaj = df_vse_tr[
+                    (df_vse_tr["leto_mesec"] == mesec_vnosa) & 
+                    (df_vse_tr["tip"] == "odhodek") & 
+                    (df_vse_tr["kategorija"] == kategorija)
+                ]["znesek"].sum()
+            else:
+                porabljeno_do_sedaj = 0.0
+
+            napoved = porabljeno_do_sedaj + znesek
+            razlika = lim_val - napoved
+
+            if napoved > lim_val:
+                st.error(f"🚨 **Pozor!** S tem vnosom boste presegli limit ({lim_val:.2f} €) za {abs(razlika):.2f} €! (Trenutna poraba: {porabljeno_do_sedaj:.2f} €)")
+            elif napoved >= 0.8 * lim_val:
+                st.warning(f"⚠️ **Opozorilo:** Po tem vnosu vam v kategoriji '{kategorija}' ostaja le še {razlika:.2f} € (Limit: {lim_val:.2f} €).")
+            else:
+                st.info(f"✅ V okviru limita. Po tem vnosu ostaja še {razlika:.2f} € od {lim_val:.2f} €.")
+
+    if st.button("💾 Shrani transakcijo", type="primary", width="stretch"):
+        if znesek <= 0:
+            st.error("Prosimo, vnesite znesek večji od 0 €.")
+        else:
             supabase.table("transakcije").insert({
                 "datum": izbran_datum.isoformat(),
                 "clan": clan,
@@ -280,6 +314,7 @@ with z_vnos:
                 "opis": opis
             }).execute()
             st.success("Transakcija uspešno shranjena v oblak!")
+            time.sleep(0.5)
             varno_osvezi()
 
 # ==========================================
@@ -416,13 +451,14 @@ with z_varcevanje:
     with col_c2:
         st.write("**Sledenje napredku ciljev:**")
         if not df_cilji.empty and not df_varc.empty:
+            df_varc["znesek"] = pd.to_numeric(df_varc["znesek"], errors="coerce").fillna(0.0)
             for _, r in df_cilji.iterrows():
                 cilj_ime = r["ime_cilja"]
                 cilj_znesek = float(r["ciljni_znesek"])
                 pol = df_varc[(df_varc["vrsta"] == "Polog v varčevanje") & (df_varc["namen"] == cilj_ime)]["znesek"].sum()
                 por = df_varc[(df_varc["vrsta"] == "Poraba iz varčevanja") & (df_varc["namen"] == cilj_ime)]["znesek"].sum()
                 trenutno = pol - por
-                procent = min(max(trenutno / cilj_znesek, 0.0), 1.0)
+                procent = min(max(trenutno / cilj_znesek, 0.0), 1.0) if cilj_znesek > 0 else 0.0
                 
                 c_lbl, c_del_btn = st.columns([4, 1])
                 with c_lbl:
@@ -465,6 +501,7 @@ with z_varcevanje:
     with vcol2:
         st.write("**📊 Stanje prihrankov:**")
         if not df_varc.empty:
+            df_varc["znesek"] = pd.to_numeric(df_varc["znesek"], errors="coerce").fillna(0.0)
             pol_vsi = df_varc[df_varc["vrsta"] == "Polog v varčevanje"]["znesek"].sum()
             por_vsi = df_varc[df_varc["vrsta"] == "Poraba iz varčevanja"]["znesek"].sum()
             st.metric("Skupaj v prihrankih", f"{pol_vsi - por_vsi:,.2f} €")
@@ -508,6 +545,7 @@ with z_fiksni:
         df_fiksni = df_vsi_fiksni.copy()
         st.write("**Seznam fiksnih mesečnih stroškov:**")
         if not df_fiksni.empty:
+            df_fiksni["znesek"] = pd.to_numeric(df_fiksni["znesek"], errors="coerce").fillna(0.0)
             st.dataframe(df_fiksni[["id", "clan", "kategorija", "znesek", "opis"]], width="stretch")
             skupaj_fiksni = df_fiksni["znesek"].sum()
             st.write(f"Vsak mesec skupaj fiksno: **{skupaj_fiksni:,.2f} €**")
@@ -541,24 +579,14 @@ with z_fiksni:
             st.info("Nimate še shranjenih ponavljajočih se stroškov.")
 
 # ==========================================
-# 6. ZAVIHEK: LIMITI PRORAČUNA
+# 6. ZAVIHEK: LIMITI PRORAČUNA Z BARVNIMI KARTICAMI
 # ==========================================
 with z_limiti:
-    st.subheader("🎯 Mesečni proračunski limiti po kategorijah")
-    with st.form("obrazec_limiti"):
-        lcol1, lcol2 = st.columns(2)
-        with lcol1:
-            kat_za_limit = st.selectbox("Kategorija za limit", [k for k in KATEGORIJE if k != "Plača"])
-        with lcol2:
-            znesek_limita = st.number_input("Mesečni limit (€)", min_value=10.0, step=10.0, value=200.0)
-        if st.form_submit_button("Shrani limit"):
-            supabase.table("limiti").upsert({"kategorija": kat_za_limit, "limit_znesek": float(znesek_limita)}).execute()
-            st.success(f"Limit za {kat_za_limit} nastavljen na {znesek_limita:,.2f} €")
-            varno_osvezi()
-
+    st.subheader("🎯 Mesečni proračunski limiti z merilniki napredka")
+    
     df_lim = nalozi_podatke("limiti", "kategorija", asc=True)
     if not df_lim.empty:
-        st.write(f"**Stanje porabe za tekoči mesec ({mesec_danes}):**")
+        df_lim["limit_znesek"] = pd.to_numeric(df_lim["limit_znesek"], errors="coerce").fillna(0.0)
         odhodki_danes = df_vse_tr[(df_vse_tr["tip"] == "odhodek") & (df_vse_tr["leto_mesec"] == mesec_danes)] if not df_vse_tr.empty else pd.DataFrame()
         poraba_po_kat = odhodki_danes.groupby("kategorija")["znesek"].sum().to_dict() if not odhodki_danes.empty else {}
 
@@ -566,25 +594,56 @@ with z_limiti:
             kat = row["kategorija"]
             lim = float(row["limit_znesek"])
             porabljeno = poraba_po_kat.get(kat, 0.0)
-            odstotek = min(porabljeno / lim, 1.0)
-            c1, c2, c3 = st.columns([3, 1, 0.5])
-            with c1:
-                st.write(f"**{kat}**: {porabljeno:,.2f} € / {lim:,.2f} € ({porabljeno/lim*100:.1f} %)")
-                st.progress(odstotek)
-            with c2:
-                if porabljeno > lim:
-                    st.error(f"Preseženo za {porabljeno - lim:,.2f} €!")
-                elif porabljeno >= 0.8 * lim:
-                    st.warning("Bližate se limitu!")
-                else:
-                    st.success("V okviru limita")
-            with c3:
-                if st.button("Briši", key=f"del_lim_{kat}"):
-                    supabase.table("limiti").delete().eq("kategorija", kat).execute()
-                    st.warning(f"Limit za {kat} izbrisan!")
-                    varno_osvezi()
+            odstotek = (porabljeno / lim) * 100 if lim > 0 else 0.0
+            razlika = lim - porabljeno
+            delez_za_bar = min(porabljeno / lim, 1.0) if lim > 0 else 0.0
+
+            if odstotek >= 100:
+                barva = "#ef4444"
+                opozorilo_tekst = f"🚨 Preseženo za {abs(razlika):.2f} €!"
+            elif odstotek >= 75:
+                barva = "#f59e0b"
+                opozorilo_tekst = f"⚠️ Ostaja le še {razlika:.2f} €"
+            else:
+                barva = "#10b981"
+                opozorilo_tekst = f"✅ Na voljo še {razlika:.2f} €"
+
+            st.markdown(
+                f"""
+                <div style="background-color: #1e293b; border-radius: 12px; padding: 12px 16px; margin-top: 12px; margin-bottom: 6px; border-left: 6px solid {barva};">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                        <span style="font-size: 1.1rem; font-weight: 600; color: #f8fafc;">{kat}</span>
+                        <span style="font-size: 0.95rem; font-weight: 600; color: {barva};">{opozorilo_tekst}</span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; font-size: 0.9rem; color: #94a3b8;">
+                        <span>Porabljeno: <b>{porabljeno:.2f} €</b></span>
+                        <span>Limit: <b>{lim:.2f} €</b> ({odstotek:.0f} %)</span>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            st.progress(delez_za_bar)
+            
+            if st.button(f"🗑️ Izbriši limit za {kat}", key=f"del_lim_{kat}"):
+                supabase.table("limiti").delete().eq("kategorija", kat).execute()
+                st.warning(f"Limit za {kat} izbrisan!")
+                varno_osvezi()
     else:
         st.info("Nimate še določenih limitov.")
+
+    st.divider()
+    st.markdown("#### ➕ Nastavi nov limit")
+    with st.form("obrazec_limiti"):
+        lcol1, lcol2 = st.columns(2)
+        with lcol1:
+            kat_za_limit = st.selectbox("Kategorija za limit", [k for k in KATEGORIJE if k != "Plača"])
+        with lcol2:
+            znesek_limita = st.number_input("Mesečni limit (€)", min_value=10.0, step=10.0, value=200.0)
+        if st.form_submit_button("Shrani limit", width="stretch"):
+            supabase.table("limiti").upsert({"kategorija": kat_za_limit, "limit_znesek": float(znesek_limita)}).execute()
+            st.success(f"Limit za {kat_za_limit} nastavljen na {znesek_limita:,.2f} €")
+            varno_osvezi()
 
 # ==========================================
 # 7. ZAVIHEK: UREJANJE IN BRISANJE
