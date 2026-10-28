@@ -33,44 +33,54 @@ if st.session_state.avtenticiran:
     st.session_state.zadnja_aktivnost = trenutni_cas
 
 if not st.session_state.avtenticiran:
-    # Mobilni CSS slog za gumbe številčnice
+    # Ključni CSS, ki prepreči zlaganje stolpcev na mobilnih napravah
     st.markdown("""
         <style>
-        div[data-testid="stVerticalBlock"] > div.pin-wrapper {
-            max-width: 320px;
-            margin: 0 auto;
+        /* Prisili vodoravno postavitev 3 stolpcev na vseh napravah */
+        div[data-testid="stHorizontalBlock"] {
+            display: flex !important;
+            flex-direction: row !important;
+            flex-wrap: nowrap !important;
+            gap: 10px !important;
+            max-width: 330px !important;
+            margin: 0 auto 10px auto !important;
         }
-        .pin-gumb button {
-            height: 65px !important;
+
+        div[data-testid="stHorizontalBlock"] > div {
+            flex: 1 1 0px !important;
+            min-width: 0 !important;
+        }
+
+        /* Oblikovanje gumbov številčnice */
+        div[data-testid="stHorizontalBlock"] button {
+            height: 64px !important;
             font-size: 1.8rem !important;
             font-weight: 600 !important;
             border-radius: 16px !important;
             border: 1px solid #334155 !important;
             background-color: #1e293b !important;
             color: #f8fafc !important;
-            transition: all 0.1s ease !important;
+            box-shadow: 0 3px 6px rgba(0,0,0,0.18) !important;
         }
-        .pin-gumb button:active {
-            transform: scale(0.94);
-            background-color: #3b82f6 !important;
+
+        div[data-testid="stHorizontalBlock"] button:active {
+            transform: scale(0.95);
+            background-color: #2563eb !important;
         }
-        .pin-gumb-akcija button {
-            height: 65px !important;
-            font-size: 1.5rem !important;
-            border-radius: 16px !important;
-        }
+
+        /* Zaslonček za prikaz PIN pikic */
         .pin-zaslon {
             text-align: center;
-            font-size: 2rem;
+            font-size: 2.2rem;
             letter-spacing: 8px;
-            padding: 14px;
+            padding: 12px;
             background: #0f172a;
             border: 2px solid #3b82f6;
-            border-radius: 14px;
+            border-radius: 16px;
             color: #60a5fa;
-            margin: 15px auto 25px auto;
-            max-width: 320px;
-            min-height: 65px;
+            margin: 10px auto 20px auto;
+            max-width: 330px;
+            min-height: 60px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -78,14 +88,14 @@ if not st.session_state.avtenticiran:
         </style>
     """, unsafe_allow_html=True)
 
-    st.markdown("<h2 style='text-align: center; margin-bottom: 2px;'>🔒 Družinski Proračun</h2>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; color: #94a3b8; font-size: 0.95rem;'>Vnesite PIN za vstop</p>", unsafe_allow_html=True)
+    st.markdown("<h3 style='text-align: center; margin-bottom: 0;'>🔒 Družinski Proračun</h3>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #94a3b8; font-size: 0.9rem;'>Vnesite PIN za vstop</p>", unsafe_allow_html=True)
 
-    # Zaslonček z pikicami
+    # Zaslonček s pikicami
     prikaz_pin = "●" * len(st.session_state.vnos_pin_buffer) if st.session_state.vnos_pin_buffer else "· · · · · · · ·"
     st.markdown(f'<div class="pin-zaslon">{prikaz_pin}</div>', unsafe_allow_html=True)
 
-    # Samodejno preverjanje, ko uporabnik vnese 8 številk
+    # Preverjanje vnosa
     if len(st.session_state.vnos_pin_buffer) == len(PRAVILNI_PIN):
         if st.session_state.vnos_pin_buffer == PRAVILNI_PIN:
             st.session_state.avtenticiran = True
@@ -93,12 +103,12 @@ if not st.session_state.avtenticiran:
             st.session_state.vnos_pin_buffer = ""
             varno_osvezi()
         else:
-            st.error("Napačen PIN! Poskusite znova.")
+            st.error("Napačen PIN!")
             st.session_state.vnos_pin_buffer = ""
-            time.sleep(0.6)
+            time.sleep(0.5)
             varno_osvezi()
 
-    # Razporeditev mobilnih gumbov
+    # Mreža 4x3 gumbov
     vrstice = [
         ["1", "2", "3"],
         ["4", "5", "6"],
@@ -108,28 +118,21 @@ if not st.session_state.avtenticiran:
 
     for vrstica in vrstice:
         c1, c2, c3 = st.columns(3)
-        gumbi_stolpci = [c1, c2, c3]
-        for col, znak in zip(gumbi_stolpci, vrstica):
+        for col, znak in zip([c1, c2, c3], vrstica):
             with col:
                 if znak == "C":
-                    st.markdown('<div class="pin-gumb-akcija">', unsafe_allow_html=True)
-                    if st.button("C", key="btn_pocisti", use_container_width=True, help="Počisti vse"):
+                    if st.button("C", key="btn_pocisti", width="stretch"):
                         st.session_state.vnos_pin_buffer = ""
                         varno_osvezi()
-                    st.markdown('</div>', unsafe_allow_html=True)
                 elif znak == "⌫":
-                    st.markdown('<div class="pin-gumb-akcija">', unsafe_allow_html=True)
-                    if st.button("⌫", key="btn_brisi", use_container_width=True, help="Izbriši zadnjo številko"):
+                    if st.button("⌫", key="btn_brisi", width="stretch"):
                         st.session_state.vnos_pin_buffer = st.session_state.vnos_pin_buffer[:-1]
                         varno_osvezi()
-                    st.markdown('</div>', unsafe_allow_html=True)
                 else:
-                    st.markdown('<div class="pin-gumb">', unsafe_allow_html=True)
-                    if st.button(znak, key=f"numpad_{znak}", use_container_width=True):
+                    if st.button(znak, key=f"numpad_{znak}", width="stretch"):
                         if len(st.session_state.vnos_pin_buffer) < len(PRAVILNI_PIN):
                             st.session_state.vnos_pin_buffer += znak
                             varno_osvezi()
-                    st.markdown('</div>', unsafe_allow_html=True)
 
     st.stop()
 
