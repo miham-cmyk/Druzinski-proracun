@@ -14,7 +14,7 @@ def varno_osvezi():
 
 st.set_page_config(page_title="Družinski Proračun Pro", page_icon="💰", layout="wide")
 
-# --- PIN ZAŠČITA & AUTO-LOGOUT (15 MINUT) S ŠTEVILČNICO ---
+# --- MOBILNA ŠTEVILČNICA & AUTO-LOGOUT ---
 PRAVILNI_PIN = "18122018"
 CAS_NEDEJAVNOSTI_SEKUNDE = 15 * 60
 
@@ -33,56 +33,103 @@ if st.session_state.avtenticiran:
     st.session_state.zadnja_aktivnost = trenutni_cas
 
 if not st.session_state.avtenticiran:
-    # Centrirana postavitev za telefon
-    _, center_col, _ = st.columns([1, 2, 1])
-    
-    with center_col:
-        st.markdown("<h2 style='text-align: center;'>🔒 Družinski Proračun</h2>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; color: gray;'>Vnesite PIN za vstop</p>", unsafe_allow_html=True)
+    # Mobilni CSS slog za gumbe številčnice
+    st.markdown("""
+        <style>
+        div[data-testid="stVerticalBlock"] > div.pin-wrapper {
+            max-width: 320px;
+            margin: 0 auto;
+        }
+        .pin-gumb button {
+            height: 65px !important;
+            font-size: 1.8rem !important;
+            font-weight: 600 !important;
+            border-radius: 16px !important;
+            border: 1px solid #334155 !important;
+            background-color: #1e293b !important;
+            color: #f8fafc !important;
+            transition: all 0.1s ease !important;
+        }
+        .pin-gumb button:active {
+            transform: scale(0.94);
+            background-color: #3b82f6 !important;
+        }
+        .pin-gumb-akcija button {
+            height: 65px !important;
+            font-size: 1.5rem !important;
+            border-radius: 16px !important;
+        }
+        .pin-zaslon {
+            text-align: center;
+            font-size: 2rem;
+            letter-spacing: 8px;
+            padding: 14px;
+            background: #0f172a;
+            border: 2px solid #3b82f6;
+            border-radius: 14px;
+            color: #60a5fa;
+            margin: 15px auto 25px auto;
+            max-width: 320px;
+            min-height: 65px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        </style>
+    """, unsafe_allow_html=True)
 
-        # Prikaz zvezdic za vnesene številke
-        prikaz_pin = "● " * len(st.session_state.vnos_pin_buffer) if st.session_state.vnos_pin_buffer else "Vnesite PIN"
-        st.markdown(
-            f"""
-            <div style='text-align: center; font-size: 1.8rem; letter-spacing: 4px; 
-                        padding: 12px; background: #1e293b; border-radius: 10px; 
-                        color: #f8fafc; margin-bottom: 20px; min-height: 55px;'>
-                {prikaz_pin}
-            </div>
-            """, 
-            unsafe_allow_html=True
-        )
+    st.markdown("<h2 style='text-align: center; margin-bottom: 2px;'>🔒 Družinski Proračun</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #94a3b8; font-size: 0.95rem;'>Vnesite PIN za vstop</p>", unsafe_allow_html=True)
 
-        # Številčnica (3x4 mreža gumbov)
-        gumbi = [
-            ["1", "2", "3"],
-            ["4", "5", "6"],
-            ["7", "8", "9"],
-            ["⌫", "0", "Vstop"]
-        ]
+    # Zaslonček z pikicami
+    prikaz_pin = "●" * len(st.session_state.vnos_pin_buffer) if st.session_state.vnos_pin_buffer else "· · · · · · · ·"
+    st.markdown(f'<div class="pin-zaslon">{prikaz_pin}</div>', unsafe_allow_html=True)
 
-        for vrsta in gumbi:
-            cols = st.columns(3)
-            for i, znak in enumerate(vrsta):
-                with cols[i]:
-                    if znak == "⌫":
-                        if st.button("⌫", key="btn_del", width="stretch"):
-                            st.session_state.vnos_pin_buffer = st.session_state.vnos_pin_buffer[:-1]
-                            varno_osvezi()
-                    elif znak == "Vstop":
-                        if st.button("✔️", key="btn_potrdi", type="primary", width="stretch"):
-                            if st.session_state.vnos_pin_buffer == PRAVILNI_PIN:
-                                st.session_state.avtenticiran = True
-                                st.session_state.zadnja_aktivnost = time.time()
-                                st.session_state.vnos_pin_buffer = ""
-                                varno_osvezi()
-                            else:
-                                st.error("Napačen PIN!")
-                                st.session_state.vnos_pin_buffer = ""
-                    else:
-                        if st.button(znak, key=f"btn_{znak}", width="stretch"):
+    # Samodejno preverjanje, ko uporabnik vnese 8 številk
+    if len(st.session_state.vnos_pin_buffer) == len(PRAVILNI_PIN):
+        if st.session_state.vnos_pin_buffer == PRAVILNI_PIN:
+            st.session_state.avtenticiran = True
+            st.session_state.zadnja_aktivnost = time.time()
+            st.session_state.vnos_pin_buffer = ""
+            varno_osvezi()
+        else:
+            st.error("Napačen PIN! Poskusite znova.")
+            st.session_state.vnos_pin_buffer = ""
+            time.sleep(0.6)
+            varno_osvezi()
+
+    # Razporeditev mobilnih gumbov
+    vrstice = [
+        ["1", "2", "3"],
+        ["4", "5", "6"],
+        ["7", "8", "9"],
+        ["C", "0", "⌫"]
+    ]
+
+    for vrstica in vrstice:
+        c1, c2, c3 = st.columns(3)
+        gumbi_stolpci = [c1, c2, c3]
+        for col, znak in zip(gumbi_stolpci, vrstica):
+            with col:
+                if znak == "C":
+                    st.markdown('<div class="pin-gumb-akcija">', unsafe_allow_html=True)
+                    if st.button("C", key="btn_pocisti", use_container_width=True, help="Počisti vse"):
+                        st.session_state.vnos_pin_buffer = ""
+                        varno_osvezi()
+                    st.markdown('</div>', unsafe_allow_html=True)
+                elif znak == "⌫":
+                    st.markdown('<div class="pin-gumb-akcija">', unsafe_allow_html=True)
+                    if st.button("⌫", key="btn_brisi", use_container_width=True, help="Izbriši zadnjo številko"):
+                        st.session_state.vnos_pin_buffer = st.session_state.vnos_pin_buffer[:-1]
+                        varno_osvezi()
+                    st.markdown('</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<div class="pin-gumb">', unsafe_allow_html=True)
+                    if st.button(znak, key=f"numpad_{znak}", use_container_width=True):
+                        if len(st.session_state.vnos_pin_buffer) < len(PRAVILNI_PIN):
                             st.session_state.vnos_pin_buffer += znak
                             varno_osvezi()
+                    st.markdown('</div>', unsafe_allow_html=True)
 
     st.stop()
 
