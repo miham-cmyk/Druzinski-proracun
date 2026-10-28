@@ -1,9 +1,9 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
-from datetime import date, datetime
+from datetime import date
 import random
 import time
+from supabase import create_client, Client
 
 # Varna osvežitev
 def varno_osvezi():
@@ -16,14 +16,13 @@ st.set_page_config(page_title="Družinski Proračun Pro", page_icon="💰", layo
 
 # --- PIN ZAŠČITA & AUTO-LOGOUT (15 MINUT) ---
 PRAVILNI_PIN = "18122018"
-CAS_NEDEJAVNOSTI_SEKUNDE = 15 * 60  # 15 minut
+CAS_NEDEJAVNOSTI_SEKUNDE = 15 * 60
 
 if "avtenticiran" not in st.session_state:
     st.session_state.avtenticiran = False
 if "zadnja_aktivnost" not in st.session_state:
     st.session_state.zadnja_aktivnost = time.time()
 
-# Preverjanje poteka seje zaradi nedejavnosti
 if st.session_state.avtenticiran:
     trenutni_cas = time.time()
     if trenutni_cas - st.session_state.zadnja_aktivnost > CAS_NEDEJAVNOSTI_SEKUNDE:
@@ -44,86 +43,40 @@ if not st.session_state.avtenticiran:
             st.error("Napačen PIN! Poskusite znova.")
     st.stop()
 
-# --- BAZA PODATKOV ---
-conn = sqlite3.connect("druzinski_proracun.db", check_same_thread=False)
-cursor = conn.cursor()
+# --- SUPABASE POVEZAVA ---
+@st.cache_resource
+def init_supabase() -> Client:
+    url = st.secrets["SUPABASE_URL"]
+    key = st.secrets["SUPABASE_KEY"]
+    return create_client(url, key)
 
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS transakcije (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        datum TEXT NOT NULL,
-        clan TEXT NOT NULL,
-        tip TEXT NOT NULL,
-        kategorija TEXT NOT NULL,
-        znesek REAL NOT NULL,
-        opis TEXT
-    )
-""")
+supabase = init_supabase()
 
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS limiti (
-        kategorija TEXT PRIMARY KEY,
-        limit_znesek REAL NOT NULL
-    )
-""")
+# Pomožne funkcije za branje tabel v DataFrame
+def nalozi_podatke(tabela: str, order_col: str = "id", asc: bool = False) -> pd.DataFrame:
+    try:
+        res = supabase.table(tabela).select("*").order(order_col, desc=not asc).execute()
+        if res.data:
+            return pd.DataFrame(res.data)
+        return pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
 
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS varcevanje (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        datum TEXT NOT NULL,
-        clan TEXT NOT NULL,
-        vrsta TEXT NOT NULL,
-        znesek REAL NOT NULL,
-        namen TEXT
-    )
-""")
-
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS varcevalni_cilji (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        ime_cilja TEXT UNIQUE NOT NULL,
-        ciljni_znesek REAL NOT NULL
-    )
-""")
-
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS fiksni_stroski (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        clan TEXT NOT NULL,
-        kategorija TEXT NOT NULL,
-        znesek REAL NOT NULL,
-        opis TEXT NOT NULL
-    )
-""")
-
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS clani_seznam (
-        ime TEXT PRIMARY KEY
-    )
-""")
-
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS kategorije_seznam (
-        ime TEXT PRIMARY KEY
-    )
-""")
-conn.commit()
-
-# Privzete vrednosti
-cursor.execute("SELECT COUNT(*) FROM clani_seznam")
-if cursor.fetchone()[0] == 0:
+# Preverjanje privzetih članov in kategorij
+df_clani_db = nalozi_podatke("clani_seznam", "ime", asc=True)
+if df_clani_db.empty:
     for c in ["Miha", "Lana", "Rea", "Oli"]:
-        cursor.execute("INSERT OR IGNORE INTO clani_seznam (ime) VALUES (?)", (c,))
-    conn.commit()
+        supabase.table("clani_seznam").insert({"ime": c}).execute()
+    df_clani_db = nalozi_podatke("clani_seznam", "ime", asc=True)
 
-cursor.execute("SELECT COUNT(*) FROM kategorije_seznam")
-if cursor.fetchone()[0] == 0:
+df_kat_db = nalozi_podatke("kategorije_seznam", "ime", asc=True)
+if df_kat_db.empty:
     for k in ["Hrana", "Položnice", "Bencin", "Zabava", "Plača", "Drugo", "Kredit", "Elektrika Avto"]:
-        cursor.execute("INSERT OR IGNORE INTO kategorije_seznam (ime) VALUES (?)", (k,))
-    conn.commit()
+        supabase.table("kategorije_seznam").insert({"ime": k}).execute()
+    df_kat_db = nalozi_podatke("kategorije_seznam", "ime", asc=True)
 
-CLANI = [row[0] for row in cursor.execute("SELECT ime FROM clani_seznam ORDER BY ime").fetchall()]
-KATEGORIJE = [row[0] for row in cursor.execute("SELECT ime FROM kategorije_seznam ORDER BY ime").fetchall()]
+CLANI = df_clani_db["ime"].tolist() if not df_clani_db.empty else ["Miha", "Lana", "Rea", "Oli"]
+KATEGORIJE = df_kat_db["ime"].tolist() if not df_kat_db.empty else ["Hrana", "Položnice", "Bencin", "Zabava", "Plača"]
 
 # --- LOGIKA ZA REINO IGRO SPOMIN ---
 SIMBOLI_SPOMINA = ["🐶", "🐱", "🦄", "🍦", "🍓", "🚀"]
@@ -142,7 +95,7 @@ def ponastavi_spomin():
 if "spomin_karte" not in st.session_state:
     ponastavi_spomin()
 
-# --- STRANSKA VRSTICA: ODJAVA & BACKUP / RESTORE ---
+# --- STRANSKA VRSTICA ---
 with st.sidebar:
     st.write("👤 **Prijavljen uporabnik**")
     if st.button("Odjava", width="stretch"):
@@ -150,25 +103,7 @@ with st.sidebar:
         varno_osvezi()
     
     st.divider()
-    st.subheader("💾 Varnostna kopija")
-    with open("druzinski_proracun.db", "rb") as f:
-        st.download_button(
-            label="Prenesi bazo (.db)",
-            data=f.read(),
-            file_name=f"backup_proracun_{date.today().isoformat()}.db",
-            mime="application/x-sqlite3",
-            width="stretch"
-        )
-
-    st.write("**Obnovi bazo:**")
-    nalozena_baza = st.file_uploader("Naloži .db datoteko", type=["db"], label_visibility="collapsed")
-    if nalozena_baza is not None:
-        if st.button("⚠️ Potrdi obnovo baze", type="primary", width="stretch"):
-            conn.close()
-            with open("druzinski_proracun.db", "wb") as f:
-                f.write(nalozena_baza.getbuffer())
-            st.success("Baza obnovljena!")
-            varno_osvezi()
+    st.caption("☁️ Baza: Supabase Cloud (trajno shranjeno)")
 
 st.title("💰 Družinski Proračun Pro")
 
@@ -177,36 +112,41 @@ st.title("💰 Družinski Proračun Pro")
 # ==========================================
 mesec_danes = date.today().strftime("%Y-%m")
 
-# 1. Preverjanje fiksnih stroškov ta mesec
-cursor.execute("SELECT COUNT(*) FROM fiksni_stroski")
-st_fiksnih = cursor.fetchone()[0]
-cursor.execute("SELECT COUNT(*) FROM transakcije WHERE strftime('%Y-%m', datum) = ? AND opis LIKE '[Fiksno]%'", (mesec_danes,))
-st_vnesenih_fiksnih = cursor.fetchone()[0]
+df_vse_tr = nalozi_podatke("transakcije", "datum", asc=False)
+df_vsi_fiksni = nalozi_podatke("fiksni_stroski", "id", asc=True)
+df_lim_check = nalozi_podatke("limiti", "kategorija", asc=True)
 
-# 2. Preverjanje limitov ta mesec
-df_lim_check = pd.read_sql_query("SELECT * FROM limiti", conn)
-presezeni_limiti = []
-opozorilni_limiti = []
-if not df_lim_check.empty:
-    cursor.execute("SELECT kategorija, SUM(znesek) FROM transakcije WHERE tip = 'odhodek' AND strftime('%Y-%m', datum) = ? GROUP BY kategorija", (mesec_danes,))
-    poraba_kat_dict = dict(cursor.fetchall())
-    for _, r in df_lim_check.iterrows():
-        k = r["kategorija"]
-        lim = r["limit_znesek"]
-        por = poraba_kat_dict.get(k, 0.0)
-        if por > lim:
-            presezeni_limiti.append(f"{k} (+{por - lim:,.2f} €)")
-        elif por >= 0.85 * lim:
-            opozorilni_limiti.append(k)
+st_fiksnih = len(df_vsi_fiksni)
+st_vnesenih_fiksnih = 0
 
-# Prikaz pametnih obvestil, če obstajajo
-if st_fiksnih > 0 and st_vnesenih_fiksnih == 0:
-    st.info(f"💡 **Opomnik za fiksne stroške:** Za tekoči mesec ({mesec_danes}) fiksni stroški še niso bili vneseni. Vnesete jih lahko v zavihku *Fiksni stroški*.")
+if not df_vse_tr.empty:
+    df_vse_tr["datum_dt"] = pd.to_datetime(df_vse_tr["datum"])
+    df_vse_tr["leto_mesec"] = df_vse_tr["datum_dt"].dt.strftime("%Y-%m")
+    tr_ta_mesec = df_vse_tr[df_vse_tr["leto_mesec"] == mesec_danes]
+    st_vnesenih_fiksnih = tr_ta_mesec[tr_ta_mesec["opis"].fillna("").str.startswith("[Fiksno]")].shape[0]
 
-if presezeni_limiti:
-    st.error(f"⚠️ **Preseženi limiti v tem mesecu:** {', '.join(presezeni_limiti)}")
-elif opozorilni_limiti:
-    st.warning(f"⚡ **Bližate se limitu pri:** {', '.join(opozorilni_limiti)}")
+    # Preverjanje limitov
+    presezeni_limiti = []
+    opozorilni_limiti = []
+    if not df_lim_check.empty:
+        odhodki_mesec = tr_ta_mesec[tr_ta_mesec["tip"] == "odhodek"]
+        poraba_dict = odhodki_mesec.groupby("kategorija")["znesek"].sum().to_dict()
+        for _, r in df_lim_check.iterrows():
+            k = r["kategorija"]
+            lim = float(r["limit_znesek"])
+            por = poraba_dict.get(k, 0.0)
+            if por > lim:
+                presezeni_limiti.append(f"{k} (+{por - lim:,.2f} €)")
+            elif por >= 0.85 * lim:
+                opozorilni_limiti.append(k)
+
+    if st_fiksnih > 0 and st_vnesenih_fiksnih == 0:
+        st.info(f"💡 **Opomnik za fiksne stroške:** Za tekoči mesec ({mesec_danes}) fiksni stroški še niso vneseni.")
+
+    if presezeni_limiti:
+        st.error(f"⚠️ **Preseženi limiti v tem mesecu:** {', '.join(presezeni_limiti)}")
+    elif opozorilni_limiti:
+        st.warning(f"⚡ **Bližate se limitu pri:** {', '.join(opozorilni_limiti)}")
 
 # --- ZAVIHKI ---
 z_vnos, z_pregled, z_letno, z_varcevanje, z_fiksni, z_limiti, z_uredi, z_nastavitve, z_rea = st.tabs([
@@ -238,28 +178,26 @@ with z_vnos:
             opis = st.text_input("Opis transakcije")
 
         if st.form_submit_button("Shrani transakcijo", type="primary", width="stretch"):
-            cursor.execute("""
-                INSERT INTO transakcije (datum, clan, tip, kategorija, znesek, opis)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (izbran_datum.isoformat(), clan, tip, kategorija, znesek, opis))
-            conn.commit()
-            st.success("Transakcija uspešno shranjena!")
+            supabase.table("transakcije").insert({
+                "datum": izbran_datum.isoformat(),
+                "clan": clan,
+                "tip": tip,
+                "kategorija": kategorija,
+                "znesek": float(znesek),
+                "opis": opis
+            }).execute()
+            st.success("Transakcija uspešno shranjena v oblak!")
             varno_osvezi()
 
 # ==========================================
 # 2. ZAVIHEK: PREGLED, ISKANJE & HITRI FILTRI
 # ==========================================
 with z_pregled:
-    df = pd.read_sql_query("SELECT * FROM transakcije ORDER BY datum DESC, id DESC", conn)
+    df = df_vse_tr.copy()
     if not df.empty:
-        df["datum_dt"] = pd.to_datetime(df["datum"])
-        df["leto_mesec"] = df["datum_dt"].dt.strftime("%Y-%m")
-
-        # Stanje izbranega meseca v seji za hitre gumbe
         if "izbran_filter_mesec" not in st.session_state:
             st.session_state.izbran_filter_mesec = mesec_danes
 
-        # Hitri gumbi za mesece
         st.write("**Hitri izbor obdobja:**")
         hf1, hf2, hf3, _ = st.columns([1, 1, 1, 3])
         with hf1:
@@ -267,7 +205,6 @@ with z_pregled:
                 st.session_state.izbran_filter_mesec = mesec_danes
                 varno_osvezi()
         with hf2:
-            # Izračun prejšnjega meseca
             prvi_dan_tega = date.today().replace(day=1)
             prejsnji_mesec = (prvi_dan_tega - pd.DateOffset(days=1)).strftime("%Y-%m")
             if st.button("⏪ Prejšnji mesec", width="stretch"):
@@ -335,8 +272,7 @@ with z_pregled:
                 if mozni_id:
                     izbran_id_del = st.selectbox("Izberite ID za izbris:", mozni_id, key="del_hitro_id")
                     if st.button("Izbriši izbrani vnos", key="btn_del_hitro", type="secondary"):
-                        cursor.execute("DELETE FROM transakcije WHERE id = ?", (izbran_id_del,))
-                        conn.commit()
+                        supabase.table("transakcije").delete().eq("id", izbran_id_del).execute()
                         st.warning(f"Transakcija {izbran_id_del} je bila izbrisana!")
                         varno_osvezi()
     else:
@@ -347,20 +283,16 @@ with z_pregled:
 # ==========================================
 with z_letno:
     st.subheader("📈 Letna primerjava po mesecih")
-    df_letno = pd.read_sql_query("SELECT * FROM transakcije", conn)
-    if not df_letno.empty:
-        df_letno["datum_dt"] = pd.to_datetime(df_letno["datum"])
-        df_letno["mesec"] = df_letno["datum_dt"].dt.strftime("%Y-%m")
-
-        pivot_prihodki = df_letno[df_letno["tip"] == "prihodek"].groupby("mesec")["znesek"].sum()
-        pivot_odhodki = df_letno[df_letno["tip"] == "odhodek"].groupby("mesec")["znesek"].sum()
+    if not df_vse_tr.empty:
+        df_letno = df_vse_tr.copy()
+        pivot_prihodki = df_letno[df_letno["tip"] == "prihodek"].groupby("leto_mesec")["znesek"].sum()
+        pivot_odhodki = df_letno[df_letno["tip"] == "odhodek"].groupby("leto_mesec")["znesek"].sum()
 
         pregled_letni = pd.DataFrame({"Prihodki (€)": pivot_prihodki, "Odhodki (€)": pivot_odhodki}).fillna(0)
         pregled_letni["Saldo (€)"] = pregled_letni["Prihodki (€)"] - pregled_letni["Odhodki (€)"]
         pregled_letni = pregled_letni.sort_index(ascending=False)
 
         st.dataframe(pregled_letni.style.format("{:,.2f} €"), width="stretch")
-        st.write("**Graf gibanja prihodkov in odhodkov skozi mesece:**")
         st.line_chart(pregled_letni[["Prihodki (€)", "Odhodki (€)"]])
     else:
         st.info("Ni še podatkov za letni pregled.")
@@ -370,7 +302,9 @@ with z_letno:
 # ==========================================
 with z_varcevanje:
     st.subheader("🏦 Varčevalni sklad & Cilji varčevanja")
-    
+    df_cilji = nalozi_podatke("varcevalni_cilji", "ime_cilja", asc=True)
+    df_varc = nalozi_podatke("varcevanje", "datum", asc=False)
+
     col_c1, col_c2 = st.columns([1, 2])
     with col_c1:
         st.write("**Dodaj nov varčevalni cilj:**")
@@ -380,23 +314,18 @@ with z_varcevanje:
             if st.form_submit_button("Dodaj cilj"):
                 if ime_c.strip():
                     try:
-                        cursor.execute("INSERT INTO varcevalni_cilji (ime_cilja, ciljni_znesek) VALUES (?, ?)", (ime_c.strip(), znesek_c))
-                        conn.commit()
+                        supabase.table("varcevalni_cilji").insert({"ime_cilja": ime_c.strip(), "ciljni_znesek": float(znesek_c)}).execute()
                         st.success(f"Cilj {ime_c} dodan!")
                         varno_osvezi()
-                    except:
-                        st.error("Cilj s tem imenom že obstaja!")
-    
+                    except Exception as e:
+                        st.error(f"Napaka ali cilj že obstaja: {e}")
+
     with col_c2:
         st.write("**Sledenje napredku ciljev:**")
-        df_cilji = pd.read_sql_query("SELECT * FROM varcevalni_cilji", conn)
-        df_varc = pd.read_sql_query("SELECT * FROM varcevanje", conn)
-
         if not df_cilji.empty and not df_varc.empty:
             for _, r in df_cilji.iterrows():
                 cilj_ime = r["ime_cilja"]
-                cilj_znesek = r["ciljni_znesek"]
-                
+                cilj_znesek = float(r["ciljni_znesek"])
                 pol = df_varc[(df_varc["vrsta"] == "Polog v varčevanje") & (df_varc["namen"] == cilj_ime)]["znesek"].sum()
                 por = df_varc[(df_varc["vrsta"] == "Poraba iz varčevanja") & (df_varc["namen"] == cilj_ime)]["znesek"].sum()
                 trenutno = pol - por
@@ -407,9 +336,8 @@ with z_varcevanje:
                     st.write(f"🎯 **{cilj_ime}**: {trenutno:,.2f} € od {cilj_znesek:,.2f} € ({procent*100:.1f} %)")
                     st.progress(procent)
                 with c_del_btn:
-                    if st.button("Briši cilj", key=f"del_cilj_{cilj_ime}"):
-                        cursor.execute("DELETE FROM varcevalni_cilji WHERE ime_cilja = ?", (cilj_ime,))
-                        conn.commit()
+                    if st.button("Briši", key=f"del_c_{cilj_ime}"):
+                        supabase.table("varcevalni_cilji").delete().eq("ime_cilja", cilj_ime).execute()
                         st.warning(f"Cilj {cilj_ime} izbrisan!")
                         varno_osvezi()
         else:
@@ -425,18 +353,19 @@ with z_varcevanje:
             v_vrsta = st.radio("Dejanje:", ["Polog v varčevanje", "Poraba iz varčevanja"], horizontal=True)
             v_znesek = st.number_input("Znesek (€):", min_value=1.0, step=5.0, value=50.0)
             v_datum = st.date_input("Datum:", value=date.today())
-            
             seznam_ciljev = ["Poljubno / Splošno"] + (df_cilji["ime_cilja"].tolist() if not df_cilji.empty else [])
             izb_cilj = st.selectbox("Poveži s ciljem (neobvezno):", seznam_ciljev)
             v_namen_tekst = st.text_input("Namen (če ni izbran cilj zgoraj):")
             koncni_namen = izb_cilj if izb_cilj != "Poljubno / Splošno" else v_namen_tekst
 
             if st.form_submit_button("Shrani v varčevanje", type="primary"):
-                cursor.execute("""
-                    INSERT INTO varcevanje (datum, clan, vrsta, znesek, namen)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (v_datum.isoformat(), v_clan, v_vrsta, v_znesek, koncni_namen))
-                conn.commit()
+                supabase.table("varcevanje").insert({
+                    "datum": v_datum.isoformat(),
+                    "clan": v_clan,
+                    "vrsta": v_vrsta,
+                    "znesek": float(v_znesek),
+                    "namen": koncni_namen
+                }).execute()
                 st.success("Zabeleženo v varčevalni sklad!")
                 varno_osvezi()
 
@@ -451,8 +380,7 @@ with z_varcevanje:
             with st.expander("🗑️ Izbriši vnos iz varčevanja"):
                 v_izb_del = st.selectbox("Izberite ID varčevanja:", df_varc["id"].tolist(), key="del_varc_id")
                 if st.button("Izbriši ta zapis varčevanja"):
-                    cursor.execute("DELETE FROM varcevanje WHERE id = ?", (v_izb_del,))
-                    conn.commit()
+                    supabase.table("varcevanje").delete().eq("id", v_izb_del).execute()
                     st.warning("Zapis varčevanja izbrisan!")
                     varno_osvezi()
         else:
@@ -474,14 +402,17 @@ with z_fiksni:
             
             if st.form_submit_button("Dodaj na seznam"):
                 if f_opis.strip():
-                    cursor.execute("INSERT INTO fiksni_stroski (clan, kategorija, znesek, opis) VALUES (?, ?, ?, ?)",
-                                   (f_clan, f_kat, f_znesek, f_opis.strip()))
-                    conn.commit()
+                    supabase.table("fiksni_stroski").insert({
+                        "clan": f_clan,
+                        "kategorija": f_kat,
+                        "znesek": float(f_znesek),
+                        "opis": f_opis.strip()
+                    }).execute()
                     st.success("Dodan na seznam!")
                     varno_osvezi()
 
     with col_f2:
-        df_fiksni = pd.read_sql_query("SELECT * FROM fiksni_stroski", conn)
+        df_fiksni = df_vsi_fiksni.copy()
         st.write("**Seznam fiksnih mesečnih stroškov:**")
         if not df_fiksni.empty:
             st.dataframe(df_fiksni[["id", "clan", "kategorija", "znesek", "opis"]], width="stretch")
@@ -492,20 +423,25 @@ with z_fiksni:
             with c_f_vnesi:
                 if st.button("🚀 Vnesi vse fiksne stroške v proračun za danes", type="primary", width="stretch"):
                     danes_iso = date.today().isoformat()
+                    novi_vnosi = []
                     for _, r in df_fiksni.iterrows():
-                        cursor.execute("""
-                            INSERT INTO transakcije (datum, clan, tip, kategorija, znesek, opis)
-                            VALUES (?, ?, 'odhodek', ?, ?, ?)
-                        """, (danes_iso, r["clan"], r["kategorija"], r["znesek"], f"[Fiksno] {r['opis']}"))
-                    conn.commit()
+                        novi_vnosi.append({
+                            "datum": danes_iso,
+                            "clan": r["clan"],
+                            "tip": "odhodek",
+                            "kategorija": r["kategorija"],
+                            "znesek": float(r["znesek"]),
+                            "opis": f"[Fiksno] {r['opis']}"
+                        })
+                    if novi_vnosi:
+                        supabase.table("transakcije").insert(novi_vnosi).execute()
                     st.success("Vsi fiksni stroški zabeleženi!")
                     varno_osvezi()
             with c_f_del:
                 with st.expander("🗑️ Odstrani fiksen strošek"):
                     izb_f_del = st.selectbox("Izberite ID stroška:", df_fiksni["id"].tolist(), key="del_fiks_id")
                     if st.button("Odstrani ta strošek"):
-                        cursor.execute("DELETE FROM fiksni_stroski WHERE id = ?", (izb_f_del,))
-                        conn.commit()
+                        supabase.table("fiksni_stroski").delete().eq("id", izb_f_del).execute()
                         st.warning("Fiksni strošek odstranjen!")
                         varno_osvezi()
         else:
@@ -523,21 +459,19 @@ with z_limiti:
         with lcol2:
             znesek_limita = st.number_input("Mesečni limit (€)", min_value=10.0, step=10.0, value=200.0)
         if st.form_submit_button("Shrani limit"):
-            cursor.execute("INSERT OR REPLACE INTO limiti (kategorija, limit_znesek) VALUES (?, ?)", (kat_za_limit, znesek_limita))
-            conn.commit()
+            supabase.table("limiti").upsert({"kategorija": kat_za_limit, "limit_znesek": float(znesek_limita)}).execute()
             st.success(f"Limit za {kat_za_limit} nastavljen na {znesek_limita:,.2f} €")
             varno_osvezi()
 
-    df_lim = pd.read_sql_query("SELECT * FROM limiti", conn)
+    df_lim = nalozi_podatke("limiti", "kategorija", asc=True)
     if not df_lim.empty:
-        trenutni_mesec = date.today().strftime("%Y-%m")
-        st.write(f"**Stanje porabe za tekoči mesec ({trenutni_mesec}):**")
-        cursor.execute("SELECT kategorija, SUM(znesek) FROM transakcije WHERE tip = 'odhodek' AND strftime('%Y-%m', datum) = ? GROUP BY kategorija", (trenutni_mesec,))
-        poraba_po_kat = dict(cursor.fetchall())
+        st.write(f"**Stanje porabe za tekoči mesec ({mesec_danes}):**")
+        odhodki_danes = df_vse_tr[(df_vse_tr["tip"] == "odhodek") & (df_vse_tr["leto_mesec"] == mesec_danes)] if not df_vse_tr.empty else pd.DataFrame()
+        poraba_po_kat = odhodki_danes.groupby("kategorija")["znesek"].sum().to_dict() if not odhodki_danes.empty else {}
 
         for _, row in df_lim.iterrows():
             kat = row["kategorija"]
-            lim = row["limit_znesek"]
+            lim = float(row["limit_znesek"])
             porabljeno = poraba_po_kat.get(kat, 0.0)
             odstotek = min(porabljeno / lim, 1.0)
             c1, c2, c3 = st.columns([3, 1, 0.5])
@@ -553,18 +487,17 @@ with z_limiti:
                     st.success("V okviru limita")
             with c3:
                 if st.button("Briši", key=f"del_lim_{kat}"):
-                    cursor.execute("DELETE FROM limiti WHERE kategorija = ?", (kat,))
-                    conn.commit()
+                    supabase.table("limiti").delete().eq("kategorija", kat).execute()
                     st.warning(f"Limit za {kat} izbrisan!")
                     varno_osvezi()
     else:
         st.info("Nimate še določenih limitov.")
 
 # ==========================================
-# 7. ZAVIHEK: UREJANJE IN POPOLN IZBRIS
+# 7. ZAVIHEK: UREJANJE IN BRISANJE
 # ==========================================
 with z_uredi:
-    df_vsi = pd.read_sql_query("SELECT * FROM transakcije ORDER BY id DESC", conn)
+    df_vsi = df_vse_tr.copy()
     if not df_vsi.empty:
         st.subheader("✏️ Uredi obstoječo transakcijo")
         seznam_idjev = df_vsi["id"].tolist()
@@ -583,10 +516,14 @@ with z_uredi:
                 u_opis = st.text_input("Opis", value=str(vrstica["opis"]) if pd.notna(vrstica["opis"]) else "")
 
             if st.form_submit_button("Posodobi vnos"):
-                cursor.execute("""
-                    UPDATE transakcije SET datum=?, clan=?, tip=?, kategorija=?, znesek=?, opis=? WHERE id=?
-                """, (u_datum.isoformat(), u_clan, u_tip, u_kat, u_znesek, u_opis, izbran_id))
-                conn.commit()
+                supabase.table("transakcije").update({
+                    "datum": u_datum.isoformat(),
+                    "clan": u_clan,
+                    "tip": u_tip,
+                    "kategorija": u_kat,
+                    "znesek": float(u_znesek),
+                    "opis": u_opis
+                }).eq("id", izbran_id).execute()
                 st.success("Posodobljeno!")
                 varno_osvezi()
 
@@ -596,15 +533,13 @@ with z_uredi:
         with b1:
             st.write("**Izbriši izbrani vnos zgoraj:**")
             if st.button(f"Izbriši vnos ID {izbran_id}", type="secondary", width="stretch"):
-                cursor.execute("DELETE FROM transakcije WHERE id = ?", (izbran_id,))
-                conn.commit()
+                supabase.table("transakcije").delete().eq("id", izbran_id).execute()
                 st.warning(f"Vnos ID {izbran_id} je bil izbrisan!")
                 varno_osvezi()
         with b2:
-            st.write("**Ponastavitev celotne baze transakcij:**")
+            st.write("**Ponastavitev vseh transakcij:**")
             if st.button("⚠️ Izbriši VSE transakcije", type="primary", width="stretch"):
-                cursor.execute("DELETE FROM transakcije")
-                conn.commit()
+                supabase.table("transakcije").delete().neq("id", 0).execute()
                 st.error("Vse transakcije so bile izbrisane!")
                 varno_osvezi()
     else:
@@ -615,85 +550,66 @@ with z_uredi:
 # ==========================================
 with z_nastavitve:
     st.subheader("⚙️ Upravljanje članov in kategorij")
-    
     ncol1, ncol2 = st.columns(2)
     with ncol1:
         st.write("**Družinski člani:**")
         st.dataframe(pd.DataFrame(CLANI, columns=["Član"]), width="stretch", hide_index=True)
-        
         with st.form("dodaj_clana_form", clear_on_submit=True):
             nov_clan = st.text_input("Novo ime člana:")
             if st.form_submit_button("Dodaj člana"):
                 if nov_clan.strip():
-                    cursor.execute("INSERT OR IGNORE INTO clani_seznam (ime) VALUES (?)", (nov_clan.strip(),))
-                    conn.commit()
+                    supabase.table("clani_seznam").upsert({"ime": nov_clan.strip()}).execute()
                     st.success(f"Član {nov_clan} dodan!")
                     varno_osvezi()
         
         if len(CLANI) > 1:
             clan_za_izbris = st.selectbox("Odstrani člana:", CLANI)
             if st.button("Odstrani izbranega člana", type="secondary"):
-                cursor.execute("DELETE FROM clani_seznam WHERE ime = ?", (clan_za_izbris,))
-                conn.commit()
+                supabase.table("clani_seznam").delete().eq("ime", clan_za_izbris).execute()
                 st.warning(f"Član {clan_za_izbris} odstranjen!")
                 varno_osvezi()
 
     with ncol2:
         st.write("**Kategorije:**")
         st.dataframe(pd.DataFrame(KATEGORIJE, columns=["Kategorija"]), width="stretch", hide_index=True)
-        
         with st.form("dodaj_kat_form", clear_on_submit=True):
             nova_kat = st.text_input("Nova kategorija:")
             if st.form_submit_button("Dodaj kategorijo"):
                 if nova_kat.strip():
-                    cursor.execute("INSERT OR IGNORE INTO kategorije_seznam (ime) VALUES (?)", (nova_kat.strip(),))
-                    conn.commit()
+                    supabase.table("kategorije_seznam").upsert({"ime": nova_kat.strip()}).execute()
                     st.success(f"Kategorija {nova_kat} dodana!")
                     varno_osvezi()
         
         if len(KATEGORIJE) > 1:
             kat_za_izbris = st.selectbox("Odstrani kategorijo:", KATEGORIJE)
             if st.button("Odstrani izbrano kategorijo", type="secondary"):
-                cursor.execute("DELETE FROM kategorije_seznam WHERE ime = ?", (kat_za_izbris,))
-                conn.commit()
+                supabase.table("kategorije_seznam").delete().eq("ime", kat_za_izbris).execute()
                 st.warning(f"Kategorija {kat_za_izbris} odstranjena!")
                 varno_osvezi()
 
     st.divider()
-
     st.subheader("📥 Uvoz bančnega izpiska (CSV)")
-    st.caption("Izvozite CSV izpisek iz svoje spletne banke in ga naložite spodaj.")
-
     csv_file = st.file_uploader("Izberite bančno datoteko (CSV)", type=["csv", "txt"])
-    
     if csv_file is not None:
         locilo = st.radio("Ločilo v CSV datoteki:", ["; (podpičje)", ", (vejica)"], horizontal=True)
         sep_char = ";" if ";" in locilo else ","
-        
         try:
             df_banka = pd.read_csv(csv_file, sep=sep_char)
             st.write("**Predogled naložene datoteke:**")
             st.dataframe(df_banka.head(3), width="stretch")
 
-            st.write("**Povežite stolpce bančnega izpiska:**")
             vsi_stolpci = df_banka.columns.tolist()
-
             icol1, icol2, icol3 = st.columns(3)
-            with icol1:
-                kol_datum = st.selectbox("Stolpec za datum:", vsi_stolpci)
-            with icol2:
-                kol_opis = st.selectbox("Stolpec za opis / prejemnika:", vsi_stolpci)
-            with icol3:
-                kol_znesek = st.selectbox("Stolpec za znesek:", vsi_stolpci)
+            with icol1: kol_datum = st.selectbox("Stolpec za datum:", vsi_stolpci)
+            with icol2: kol_opis = st.selectbox("Stolpec za opis / prejemnika:", vsi_stolpci)
+            with icol3: kol_znesek = st.selectbox("Stolpec za znesek:", vsi_stolpci)
 
             icol4, icol5 = st.columns(2)
-            with icol4:
-                privzeti_clan = st.selectbox("Privzeti član za transakcije:", CLANI)
-            with icol5:
-                privzeta_kat = st.selectbox("Privzeta kategorija:", KATEGORIJE)
+            with icol4: privzeti_clan = st.selectbox("Privzeti član:", CLANI)
+            with icol5: privzeta_kat = st.selectbox("Privzeta kategorija:", KATEGORIJE)
 
             if st.button("🚀 Uvozi vse transakcije v proračun", type="primary"):
-                uspesno = 0
+                uvozi_list = []
                 for _, row in df_banka.iterrows():
                     try:
                         surov_znesek = str(row[kol_znesek]).replace("€", "").replace(" ", "").replace(".", "").replace(",", ".")
@@ -705,16 +621,20 @@ with z_nastavitve:
                         datum_str = datum_tr.strftime("%Y-%m-%d") if pd.notna(datum_tr) else date.today().isoformat()
                         opis_tr = str(row[kol_opis])[:100]
 
-                        cursor.execute("""
-                            INSERT INTO transakcije (datum, clan, tip, kategorija, znesek, opis)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        """, (datum_str, privzeti_clan, tip_tr, privzeta_kat, abs_znesek, f"[Banka] {opis_tr}"))
-                        uspesno += 1
+                        uvozi_list.append({
+                            "datum": datum_str,
+                            "clan": privzeti_clan,
+                            "tip": tip_tr,
+                            "kategorija": privzeta_kat,
+                            "znesek": abs_znesek,
+                            "opis": f"[Banka] {opis_tr}"
+                        })
                     except Exception:
                         continue
 
-                conn.commit()
-                st.success(f"Uspešno uvoženih {uspesno} transakcij!")
+                if uvozi_list:
+                    supabase.table("transakcije").insert(uvozi_list).execute()
+                st.success(f"Uspešno uvoženih {len(uvozi_list)} transakcij!")
                 varno_osvezi()
         except Exception as e:
             st.error(f"Napaka pri branju datoteke: {e}")
