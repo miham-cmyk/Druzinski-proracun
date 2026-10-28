@@ -46,8 +46,8 @@ if not st.session_state.avtenticiran:
 # --- SUPABASE POVEZAVA ---
 @st.cache_resource
 def init_supabase() -> Client:
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
+    url = "https://hvgwewvlagozqfbxwjdm.supabase.co"
+    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh2Z3dld3ZsYWdvenFmYnh3amRtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTMxNzE5MTgsImV4cCI6MjEwODc0NzkxOH0.xYigE2z3iWFkYR-a3PVDIoax490wrp1wN20DAo_cHvk"
     return create_client(url, key)
 
 supabase = init_supabase()
