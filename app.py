@@ -14,7 +14,7 @@ def varno_osvezi():
 
 st.set_page_config(page_title="Družinski Proračun Pro", page_icon="💰", layout="wide")
 
-# --- PIN ZAŠČITA & AUTO-LOGOUT (15 MINUT) ---
+# --- PIN ZAŠČITA & AUTO-LOGOUT (15 MINUT) S ŠTEVILČNICO ---
 PRAVILNI_PIN = "18122018"
 CAS_NEDEJAVNOSTI_SEKUNDE = 15 * 60
 
@@ -22,6 +22,8 @@ if "avtenticiran" not in st.session_state:
     st.session_state.avtenticiran = False
 if "zadnja_aktivnost" not in st.session_state:
     st.session_state.zadnja_aktivnost = time.time()
+if "vnos_pin_buffer" not in st.session_state:
+    st.session_state.vnos_pin_buffer = ""
 
 if st.session_state.avtenticiran:
     trenutni_cas = time.time()
@@ -31,16 +33,57 @@ if st.session_state.avtenticiran:
     st.session_state.zadnja_aktivnost = trenutni_cas
 
 if not st.session_state.avtenticiran:
-    st.title("🔒 Družinski Proračun")
-    vnesen_pin = st.text_input("Vnesite PIN za vstop", type="password")
+    # Centrirana postavitev za telefon
+    _, center_col, _ = st.columns([1, 2, 1])
     
-    if st.button("Vstopi", type="primary"):
-        if vnesen_pin == PRAVILNI_PIN:
-            st.session_state.avtenticiran = True
-            st.session_state.zadnja_aktivnost = time.time()
-            varno_osvezi()
-        else:
-            st.error("Napačen PIN! Poskusite znova.")
+    with center_col:
+        st.markdown("<h2 style='text-align: center;'>🔒 Družinski Proračun</h2>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: gray;'>Vnesite PIN za vstop</p>", unsafe_allow_html=True)
+
+        # Prikaz zvezdic za vnesene številke
+        prikaz_pin = "● " * len(st.session_state.vnos_pin_buffer) if st.session_state.vnos_pin_buffer else "Vnesite PIN"
+        st.markdown(
+            f"""
+            <div style='text-align: center; font-size: 1.8rem; letter-spacing: 4px; 
+                        padding: 12px; background: #1e293b; border-radius: 10px; 
+                        color: #f8fafc; margin-bottom: 20px; min-height: 55px;'>
+                {prikaz_pin}
+            </div>
+            """, 
+            unsafe_allow_html=True
+        )
+
+        # Številčnica (3x4 mreža gumbov)
+        gumbi = [
+            ["1", "2", "3"],
+            ["4", "5", "6"],
+            ["7", "8", "9"],
+            ["⌫", "0", "Vstop"]
+        ]
+
+        for vrsta in gumbi:
+            cols = st.columns(3)
+            for i, znak in enumerate(vrsta):
+                with cols[i]:
+                    if znak == "⌫":
+                        if st.button("⌫", key="btn_del", width="stretch"):
+                            st.session_state.vnos_pin_buffer = st.session_state.vnos_pin_buffer[:-1]
+                            varno_osvezi()
+                    elif znak == "Vstop":
+                        if st.button("✔️", key="btn_potrdi", type="primary", width="stretch"):
+                            if st.session_state.vnos_pin_buffer == PRAVILNI_PIN:
+                                st.session_state.avtenticiran = True
+                                st.session_state.zadnja_aktivnost = time.time()
+                                st.session_state.vnos_pin_buffer = ""
+                                varno_osvezi()
+                            else:
+                                st.error("Napačen PIN!")
+                                st.session_state.vnos_pin_buffer = ""
+                    else:
+                        if st.button(znak, key=f"btn_{znak}", width="stretch"):
+                            st.session_state.vnos_pin_buffer += znak
+                            varno_osvezi()
+
     st.stop()
 
 # --- SUPABASE POVEZAVA ---
